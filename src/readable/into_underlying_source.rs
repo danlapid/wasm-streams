@@ -1,11 +1,12 @@
 use std::cell::RefCell;
-use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use futures_util::future::{AbortHandle, TryFutureExt, abortable};
 use futures_util::stream::{Stream, TryStreamExt};
 use js_sys::Promise;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
@@ -13,20 +14,10 @@ use super::sys;
 
 type JsValueStream = dyn Stream<Item = Result<JsValue, JsValue>>;
 
-#[wasm_bindgen]
 pub(crate) struct IntoUnderlyingSource {
     inner: Rc<RefCell<Inner>>,
     pull_handle: Option<AbortHandle>,
 }
-
-// SAFETY: `Inner` holds an `Option<Pin<Box<JsValueStream>>>` and uses the
-// take-and-replace pattern around every fallible await in `Inner::pull`. On
-// panic, the stream is already taken out of the `Option`, leaving the cell in
-// a clean `None` state. Subsequent calls fail cleanly via `unwrap_throw`
-// rather than observing a torn intermediate state, which upholds the logical
-// unwind-safety contract `#[wasm_bindgen]` enforces for exported types.
-impl UnwindSafe for IntoUnderlyingSource {}
-impl RefUnwindSafe for IntoUnderlyingSource {}
 
 impl IntoUnderlyingSource {
     pub fn new(stream: Box<JsValueStream>) -> Self {
@@ -35,12 +26,43 @@ impl IntoUnderlyingSource {
             pull_handle: None,
         }
     }
-}
 
-#[allow(clippy::await_holding_refcell_ref)]
-#[wasm_bindgen]
-impl IntoUnderlyingSource {
-    pub fn pull(&mut self, controller: sys::ReadableStreamDefaultController) -> Promise {
+    /// Converts into a raw [`UnderlyingSource`](sys::UnderlyingSource) object,
+    /// with `pull` and `cancel` backed by imported closures.
+    /// The closures (and thus the source) live as long as the JS object,
+    /// and are deallocated through GC finalization.
+    pub fn into_raw(self) -> sys::UnderlyingSource {
+        let source = Rc::new(RefCell::new(Some(self)));
+        let raw = sys::UnderlyingSource::new();
+
+        let pull = {
+            let source = source.clone();
+            Closure::<dyn FnMut(sys::ReadableStreamDefaultController) -> Promise>::new(
+                move |controller| {
+                    // This mutable borrow can never panic, since the ReadableStream
+                    // always queues each operation on the underlying source.
+                    source
+                        .try_borrow_mut()
+                        .unwrap_throw()
+                        .as_mut()
+                        .unwrap_throw()
+                        .pull(controller)
+                },
+            )
+        };
+        raw.set_pull(pull.into_js_value().unchecked_ref());
+
+        let cancel = Closure::<dyn FnMut()>::new(move || {
+            // The stream has been canceled, drop everything.
+            *source.try_borrow_mut().unwrap_throw() = None;
+        });
+        raw.set_cancel(cancel.into_js_value().unchecked_ref());
+
+        raw
+    }
+
+    #[allow(clippy::await_holding_refcell_ref)]
+    fn pull(&mut self, controller: sys::ReadableStreamDefaultController) -> Promise {
         let inner = self.inner.clone();
         let fut = async move {
             // This mutable borrow can never panic, since the ReadableStream always queues
@@ -60,11 +82,6 @@ impl IntoUnderlyingSource {
         // leaving it in a clean None state. This prevents use of corrupted state
         // after a panic is caught.
         future_to_promise(AssertUnwindSafe(fut))
-    }
-
-    pub fn cancel(self) {
-        // The stream has been canceled, drop everything.
-        drop(self);
     }
 }
 

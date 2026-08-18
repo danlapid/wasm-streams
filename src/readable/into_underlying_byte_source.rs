@@ -1,11 +1,12 @@
 use std::cell::RefCell;
-use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use futures_util::future::{AbortHandle, TryFutureExt, abortable};
 use futures_util::io::{AsyncRead, AsyncReadExt};
 use js_sys::{Error as JsError, Promise, Uint8Array};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
@@ -13,23 +14,12 @@ use crate::util::{checked_cast_to_u32, clamp_to_usize};
 
 use super::sys;
 
-#[wasm_bindgen]
 pub(crate) struct IntoUnderlyingByteSource {
     inner: Rc<RefCell<Inner>>,
     default_buffer_len: usize,
     controller: Option<sys::ReadableByteStreamController>,
     pull_handle: Option<AbortHandle>,
 }
-
-// SAFETY: `Inner` holds an `Option<Pin<Box<dyn AsyncRead>>>` and uses the
-// take-and-replace pattern across every fallible await point in `Inner::pull`.
-// On panic, the inner async_read is already taken out of the `Option`, leaving
-// the cell in a clean `None` state. The `Rc<RefCell<Inner>>` interior mutability
-// therefore cannot expose torn invariants to a subsequent call after a caught
-// panic, satisfying the logical unwind-safety contract enforced by
-// `#[wasm_bindgen]` exports under `panic = "unwind"`.
-impl UnwindSafe for IntoUnderlyingByteSource {}
-impl RefUnwindSafe for IntoUnderlyingByteSource {}
 
 impl IntoUnderlyingByteSource {
     pub fn new(async_read: Box<dyn AsyncRead>, default_buffer_len: usize) -> Self {
@@ -40,26 +30,62 @@ impl IntoUnderlyingByteSource {
             pull_handle: None,
         }
     }
-}
 
-#[allow(clippy::await_holding_refcell_ref)]
-#[wasm_bindgen]
-impl IntoUnderlyingByteSource {
-    #[wasm_bindgen(getter, js_name = type)]
-    pub fn type_(&self) -> sys::ReadableStreamType {
-        sys::ReadableStreamType::Bytes
+    /// Converts into a raw [`UnderlyingSource`](sys::UnderlyingSource) object,
+    /// with `start`, `pull` and `cancel` backed by imported closures.
+    /// The closures (and thus the source) live as long as the JS object,
+    /// and are deallocated through GC finalization.
+    pub fn into_raw(self) -> sys::UnderlyingSource {
+        let raw = sys::UnderlyingSource::new();
+        raw.set_type(sys::ReadableStreamType::Bytes);
+        raw.set_auto_allocate_chunk_size(checked_cast_to_u32(self.default_buffer_len) as f64);
+        let source = Rc::new(RefCell::new(Some(self)));
+
+        let start = {
+            let source = source.clone();
+            Closure::<dyn FnMut(sys::ReadableByteStreamController)>::new(move |controller| {
+                source
+                    .try_borrow_mut()
+                    .unwrap_throw()
+                    .as_mut()
+                    .unwrap_throw()
+                    .start(controller)
+            })
+        };
+        raw.set_start(start.into_js_value().unchecked_ref());
+
+        let pull = {
+            let source = source.clone();
+            Closure::<dyn FnMut(sys::ReadableByteStreamController) -> Promise>::new(
+                move |controller| {
+                    // This mutable borrow can never panic, since the ReadableStream
+                    // always queues each operation on the underlying source.
+                    source
+                        .try_borrow_mut()
+                        .unwrap_throw()
+                        .as_mut()
+                        .unwrap_throw()
+                        .pull(controller)
+                },
+            )
+        };
+        raw.set_pull(pull.into_js_value().unchecked_ref());
+
+        let cancel = Closure::<dyn FnMut()>::new(move || {
+            // The stream has been canceled, drop everything.
+            *source.try_borrow_mut().unwrap_throw() = None;
+        });
+        raw.set_cancel(cancel.into_js_value().unchecked_ref());
+
+        raw
     }
 
-    #[wasm_bindgen(getter, js_name = autoAllocateChunkSize)]
-    pub fn auto_allocate_chunk_size(&self) -> usize {
-        self.default_buffer_len
-    }
-
-    pub fn start(&mut self, controller: sys::ReadableByteStreamController) {
+    fn start(&mut self, controller: sys::ReadableByteStreamController) {
         self.controller = Some(controller);
     }
 
-    pub fn pull(&mut self, controller: sys::ReadableByteStreamController) -> Promise {
+    #[allow(clippy::await_holding_refcell_ref)]
+    fn pull(&mut self, controller: sys::ReadableByteStreamController) -> Promise {
         let inner = self.inner.clone();
         let fut = async move {
             // This mutable borrow can never panic, since the ReadableStream always queues
@@ -79,11 +105,6 @@ impl IntoUnderlyingByteSource {
         // leaving it in a clean None state. This prevents use of corrupted state
         // after a panic is caught.
         future_to_promise(AssertUnwindSafe(fut))
-    }
-
-    pub fn cancel(self) {
-        // The stream has been canceled, drop everything.
-        drop(self);
     }
 }
 

@@ -1,27 +1,19 @@
 use std::cell::RefCell;
-use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use futures_util::{Sink, SinkExt};
 use js_sys::Promise;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
-#[wasm_bindgen]
+use super::sys;
+
 pub(crate) struct IntoUnderlyingSink {
     inner: Rc<RefCell<Inner>>,
 }
-
-// SAFETY: `Inner` holds an `Option<Pin<Box<dyn Sink<...>>>>` and uses the
-// take-and-replace pattern around every fallible await in `Inner::write` /
-// `Inner::close` / `Inner::abort`. On panic the sink is already taken out of
-// the `Option`, leaving the cell in a clean `None` state. The
-// `Rc<RefCell<Inner>>` interior mutability therefore cannot expose torn
-// invariants after a caught panic, upholding the logical unwind-safety
-// contract enforced by `#[wasm_bindgen]` exports under `panic = "unwind"`.
-impl UnwindSafe for IntoUnderlyingSink {}
-impl RefUnwindSafe for IntoUnderlyingSink {}
 
 impl IntoUnderlyingSink {
     pub fn new(sink: Box<dyn Sink<JsValue, Error = JsValue>>) -> Self {
@@ -29,12 +21,55 @@ impl IntoUnderlyingSink {
             inner: Rc::new(RefCell::new(Inner::new(sink))),
         }
     }
-}
 
-#[allow(clippy::await_holding_refcell_ref)]
-#[wasm_bindgen]
-impl IntoUnderlyingSink {
-    pub fn write(&mut self, chunk: JsValue) -> Promise {
+    /// Converts into a raw [`UnderlyingSink`](sys::UnderlyingSink) object,
+    /// with `write`, `close` and `abort` backed by imported closures.
+    /// The closures (and thus the sink) live as long as the JS object,
+    /// and are deallocated through GC finalization.
+    pub fn into_raw(self) -> sys::UnderlyingSink {
+        let sink = Rc::new(RefCell::new(Some(self)));
+        let raw = sys::UnderlyingSink::new();
+
+        let write = {
+            let sink = sink.clone();
+            Closure::<dyn FnMut(JsValue) -> Promise>::new(move |chunk| {
+                // This mutable borrow can never panic, since the WritableStream
+                // always queues each operation on the underlying sink.
+                sink.try_borrow_mut()
+                    .unwrap_throw()
+                    .as_mut()
+                    .unwrap_throw()
+                    .write(chunk)
+            })
+        };
+        raw.set_write(write.into_js_value().unchecked_ref());
+
+        let close = {
+            let sink = sink.clone();
+            Closure::<dyn FnMut() -> Promise>::new(move || {
+                sink.try_borrow_mut()
+                    .unwrap_throw()
+                    .take()
+                    .unwrap_throw()
+                    .close()
+            })
+        };
+        raw.set_close(close.into_js_value().unchecked_ref());
+
+        let abort = Closure::<dyn FnMut(JsValue) -> Promise>::new(move |reason| {
+            sink.try_borrow_mut()
+                .unwrap_throw()
+                .take()
+                .unwrap_throw()
+                .abort(reason)
+        });
+        raw.set_abort(abort.into_js_value().unchecked_ref());
+
+        raw
+    }
+
+    #[allow(clippy::await_holding_refcell_ref)]
+    fn write(&mut self, chunk: JsValue) -> Promise {
         let inner = self.inner.clone();
         // SAFETY: We use the take-and-replace pattern in Inner::write() to ensure
         // that if a panic occurs, the sink is already taken out of the Option,
@@ -48,7 +83,8 @@ impl IntoUnderlyingSink {
         }))
     }
 
-    pub fn close(self) -> Promise {
+    #[allow(clippy::await_holding_refcell_ref)]
+    fn close(self) -> Promise {
         // SAFETY: Inner::close() takes the sink before the fallible operation.
         future_to_promise(AssertUnwindSafe(async move {
             let mut inner = self.inner.try_borrow_mut().unwrap_throw();
@@ -56,7 +92,8 @@ impl IntoUnderlyingSink {
         }))
     }
 
-    pub fn abort(self, reason: JsValue) -> Promise {
+    #[allow(clippy::await_holding_refcell_ref)]
+    fn abort(self, reason: JsValue) -> Promise {
         // SAFETY: Inner::abort() just sets sink to None, no fallible operation.
         future_to_promise(AssertUnwindSafe(async move {
             let mut inner = self.inner.try_borrow_mut().unwrap_throw();

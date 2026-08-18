@@ -51,10 +51,10 @@ impl WritableStream {
     where
         Si: Sink<JsValue, Error = JsValue> + 'static,
     {
-        let sink = IntoUnderlyingSink::new(Box::new(sink));
+        let sink = IntoUnderlyingSink::new(Box::new(sink)).into_raw();
         // Use the default queuing strategy (with a HWM of 1 chunk).
         // We shouldn't set HWM to 0, since that would break piping to the writable stream.
-        let raw = sys::WritableStreamExt::new_with_into_underlying_sink(sink).unchecked_into();
+        let raw = sys::WritableStream::new_with_underlying_sink(&sink).unwrap_throw();
         Self::from_raw(raw)
     }
 

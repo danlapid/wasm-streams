@@ -67,13 +67,15 @@ impl ReadableStream {
     where
         St: Stream<Item = Result<JsValue, JsValue>> + 'static,
     {
-        let source = IntoUnderlyingSource::new(Box::new(stream));
+        let source = IntoUnderlyingSource::new(Box::new(stream)).into_raw();
         // Set HWM to 0 to prevent the JS ReadableStream from buffering chunks in its queue,
         // since the original Rust stream is better suited to handle that.
         let strategy = QueuingStrategy::new(0.0);
-        let raw =
-            sys::ReadableStreamExt::new_with_into_underlying_source(source, strategy.into_raw())
-                .unchecked_into();
+        let raw = sys::ReadableStream::new_with_underlying_source_and_strategy(
+            &source,
+            &strategy.into_raw(),
+        )
+        .unwrap_throw();
         Self::from_raw(raw)
     }
 
@@ -93,10 +95,10 @@ impl ReadableStream {
     where
         R: AsyncRead + 'static,
     {
-        let source = IntoUnderlyingByteSource::new(Box::new(async_read), default_buffer_len);
-        let raw = sys::ReadableStreamExt::new_with_into_underlying_byte_source(source)
-            .expect_throw("readable byte streams not supported")
-            .unchecked_into();
+        let source =
+            IntoUnderlyingByteSource::new(Box::new(async_read), default_buffer_len).into_raw();
+        let raw = sys::ReadableStream::new_with_underlying_source(&source)
+            .expect_throw("readable byte streams not supported");
         Self::from_raw(raw)
     }
 

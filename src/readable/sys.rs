@@ -15,27 +15,13 @@ pub use web_sys::ReadableStreamReadResult;
 pub use web_sys::ReadableStreamReaderMode;
 pub use web_sys::ReadableStreamType;
 pub use web_sys::StreamPipeOptions as PipeOptions;
-
-use crate::queuing_strategy::sys::QueuingStrategy;
-use crate::readable::into_underlying_byte_source::IntoUnderlyingByteSource;
-use crate::readable::into_underlying_source::IntoUnderlyingSource;
+pub use web_sys::UnderlyingSource;
 
 #[wasm_bindgen]
 extern "C" {
     /// Additional methods for [`ReadableStream`](web_sys::ReadableStream).
     #[wasm_bindgen(js_name = ReadableStream, typescript_type = "ReadableStream")]
     pub(crate) type ReadableStreamExt;
-
-    #[wasm_bindgen(constructor, js_class = ReadableStream)]
-    pub(crate) fn new_with_into_underlying_source(
-        source: IntoUnderlyingSource,
-        strategy: QueuingStrategy,
-    ) -> ReadableStreamExt;
-
-    #[wasm_bindgen(constructor, catch, js_class = ReadableStream)]
-    pub(crate) fn new_with_into_underlying_byte_source(
-        source: IntoUnderlyingByteSource,
-    ) -> Result<ReadableStreamExt, Error>;
 
     #[wasm_bindgen(method, catch, js_class = ReadableStream, js_name = getReader)]
     pub(crate) fn try_get_reader(this: &ReadableStreamExt) -> Result<Object, Error>;
