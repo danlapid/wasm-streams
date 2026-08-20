@@ -31,7 +31,9 @@ impl IntoUnderlyingSink {
         let raw = sys::UnderlyingSink::new();
 
         let write = {
-            let sink = sink.clone();
+            // SAFETY: Inner::write() uses the take-and-replace pattern to remain
+            // in a clean state if a panic is caught across this closure.
+            let sink = AssertUnwindSafe(sink.clone());
             Closure::<dyn FnMut(JsValue) -> Promise>::new(move |chunk| {
                 // This mutable borrow can never panic, since the WritableStream
                 // always queues each operation on the underlying sink.
@@ -45,7 +47,8 @@ impl IntoUnderlyingSink {
         raw.set_write(write.into_js_value().unchecked_ref());
 
         let close = {
-            let sink = sink.clone();
+            // SAFETY: close() takes the sink out before any fallible operation.
+            let sink = AssertUnwindSafe(sink.clone());
             Closure::<dyn FnMut() -> Promise>::new(move || {
                 sink.try_borrow_mut()
                     .unwrap_throw()
@@ -56,13 +59,17 @@ impl IntoUnderlyingSink {
         };
         raw.set_close(close.into_js_value().unchecked_ref());
 
-        let abort = Closure::<dyn FnMut(JsValue) -> Promise>::new(move |reason| {
-            sink.try_borrow_mut()
-                .unwrap_throw()
-                .take()
-                .unwrap_throw()
-                .abort(reason)
-        });
+        let abort = {
+            // SAFETY: abort() only drops the sink, which cannot panic.
+            let sink = AssertUnwindSafe(sink);
+            Closure::<dyn FnMut(JsValue) -> Promise>::new(move |reason| {
+                sink.try_borrow_mut()
+                    .unwrap_throw()
+                    .take()
+                    .unwrap_throw()
+                    .abort(reason)
+            })
+        };
         raw.set_abort(abort.into_js_value().unchecked_ref());
 
         raw

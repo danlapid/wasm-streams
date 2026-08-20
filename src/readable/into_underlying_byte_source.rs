@@ -42,7 +42,8 @@ impl IntoUnderlyingByteSource {
         let source = Rc::new(RefCell::new(Some(self)));
 
         let start = {
-            let source = source.clone();
+            // SAFETY: start() only stores the controller, which cannot panic.
+            let source = AssertUnwindSafe(source.clone());
             Closure::<dyn FnMut(sys::ReadableByteStreamController)>::new(move |controller| {
                 source
                     .try_borrow_mut()
@@ -55,7 +56,9 @@ impl IntoUnderlyingByteSource {
         raw.set_start(start.into_js_value().unchecked_ref());
 
         let pull = {
-            let source = source.clone();
+            // SAFETY: Inner::pull() uses the take-and-replace pattern to remain
+            // in a clean state if a panic is caught across this closure.
+            let source = AssertUnwindSafe(source.clone());
             Closure::<dyn FnMut(sys::ReadableByteStreamController) -> Promise>::new(
                 move |controller| {
                     // This mutable borrow can never panic, since the ReadableStream
@@ -71,10 +74,14 @@ impl IntoUnderlyingByteSource {
         };
         raw.set_pull(pull.into_js_value().unchecked_ref());
 
-        let cancel = Closure::<dyn FnMut()>::new(move || {
-            // The stream has been canceled, drop everything.
-            *source.try_borrow_mut().unwrap_throw() = None;
-        });
+        let cancel = {
+            // SAFETY: cancel() only drops the source, which cannot panic.
+            let source = AssertUnwindSafe(source);
+            Closure::<dyn FnMut()>::new(move || {
+                // The stream has been canceled, drop everything.
+                *source.try_borrow_mut().unwrap_throw() = None;
+            })
+        };
         raw.set_cancel(cancel.into_js_value().unchecked_ref());
 
         raw
