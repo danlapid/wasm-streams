@@ -8,7 +8,11 @@ use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
-#[wasm_bindgen(private)]
+#[wasm_bindgen(
+    private,
+    skip_typescript,
+    js_name = "wasm_streams_0_6_IntoUnderlyingSink"
+)]
 pub(crate) struct IntoUnderlyingSink {
     inner: Rc<RefCell<Inner>>,
 }
@@ -32,7 +36,7 @@ impl IntoUnderlyingSink {
 }
 
 #[allow(clippy::await_holding_refcell_ref)]
-#[wasm_bindgen]
+#[wasm_bindgen(js_class = "wasm_streams_0_6_IntoUnderlyingSink")]
 impl IntoUnderlyingSink {
     pub fn write(&mut self, chunk: JsValue) -> Promise {
         let inner = self.inner.clone();

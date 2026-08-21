@@ -13,7 +13,11 @@ use crate::util::{checked_cast_to_u32, clamp_to_usize};
 
 use super::sys;
 
-#[wasm_bindgen(private)]
+#[wasm_bindgen(
+    private,
+    skip_typescript,
+    js_name = "wasm_streams_0_6_IntoUnderlyingByteSource"
+)]
 pub(crate) struct IntoUnderlyingByteSource {
     inner: Rc<RefCell<Inner>>,
     default_buffer_len: usize,
@@ -43,7 +47,7 @@ impl IntoUnderlyingByteSource {
 }
 
 #[allow(clippy::await_holding_refcell_ref)]
-#[wasm_bindgen]
+#[wasm_bindgen(js_class = "wasm_streams_0_6_IntoUnderlyingByteSource")]
 impl IntoUnderlyingByteSource {
     #[wasm_bindgen(getter, js_name = type)]
     pub fn type_(&self) -> sys::ReadableStreamType {

@@ -13,7 +13,11 @@ use super::sys;
 
 type JsValueStream = dyn Stream<Item = Result<JsValue, JsValue>>;
 
-#[wasm_bindgen(private)]
+#[wasm_bindgen(
+    private,
+    skip_typescript,
+    js_name = "wasm_streams_0_6_IntoUnderlyingSource"
+)]
 pub(crate) struct IntoUnderlyingSource {
     inner: Rc<RefCell<Inner>>,
     pull_handle: Option<AbortHandle>,
@@ -38,7 +42,7 @@ impl IntoUnderlyingSource {
 }
 
 #[allow(clippy::await_holding_refcell_ref)]
-#[wasm_bindgen]
+#[wasm_bindgen(js_class = "wasm_streams_0_6_IntoUnderlyingSource")]
 impl IntoUnderlyingSource {
     pub fn pull(&mut self, controller: sys::ReadableStreamDefaultController) -> Promise {
         let inner = self.inner.clone();
