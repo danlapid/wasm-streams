@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 js-sys = "^0.3.85"
