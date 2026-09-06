@@ -1,0 +1,19 @@
+Cargo.toml
+  s_dccdbcee9eb73b::t_fd67a429da6fd3 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2ec32b30b14fc752ad34ff6e8611bad8439a1c4c",
+  "prompts": {},
+  "sessions": {
+    "s_dccdbcee9eb73b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07663-3837-7741-892f-3e0fae2953db",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}
